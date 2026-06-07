@@ -1,0 +1,66 @@
+{
+	"name": "vite-plugin-effect",
+	"version": "0.1.0-beta.1",
+	"description": "Vite plugin for Effect v4 — type-safe backend API & RPC gateway with virtual client module",
+	"type": "module",
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./client": {
+			"types": "./client.d.ts"
+		}
+	},
+	"files": [
+		"dist",
+		"client.d.ts",
+		"README.md",
+		"LICENSE"
+	],
+	"scripts": {
+		"build": "tsc --declaration --outDir dist && vite build --config vite.runtime.config.ts",
+		"test": "bun test",
+		"typecheck": "tsc --noEmit",
+		"prepublishOnly": "bun run build && bun run test"
+	},
+	"keywords": [
+		"vite",
+		"vite-plugin",
+		"effect",
+		"effect-ts",
+		"effect api",
+		"rpc",
+		"fullstack",
+		"typescript"
+	],
+	"license": "MIT",
+	"author": "osuki-dev",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/osuki-dev/vite-plugin-effect.git"
+	},
+	"bugs": {
+		"url": "https://github.com/osuki-dev/vite-plugin-effect/issues"
+	},
+	"homepage": "https://github.com/osuki-dev/vite-plugin-effect#readme",
+	"engines": {
+		"node": ">=18.0.0"
+	},
+	"peerDependencies": {
+		"effect": "^4.0.0-beta.78",
+		"vite": "^8.0.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"@types/node": "^25.9.1",
+		"effect": "4.0.0-beta.78",
+		"typescript": "^5.9.3",
+		"vite": "^8.0.16"
+	},
+	"dependencies": {}
+}

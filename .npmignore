@@ -1,0 +1,28 @@
+# 测试文件
+test/
+test/react-app/
+test/fixture/
+*.test.ts
+
+# 源码（已编译到 dist）
+src/
+
+# 开发环境
+.vscode/
+.idea/
+*.log
+
+# 构建产物（通过 npm publish 会自动包含 files 字段中的内容）
+# dist/ 是明确包含的，不需要忽略
+
+# CI/CD
+.github/
+
+# 其他
+*.tgz
+.DS_Store
+*.tsbuildinfo
+
+# 配置文件（不需要发布）
+tsconfig.json
+# 保留 package.json 和 README.md
