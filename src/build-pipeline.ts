@@ -13,23 +13,8 @@ const runtimeModuleDir = path.dirname(fileURLToPath(import.meta.url))
 
 export async function copyProductionRuntime(serverOutDir: string, platform: "node" | "cloudflare" = "node"): Promise<void> {
   const runtimeName = platform === "cloudflare" ? "cloudflare-runtime" : "production-runtime"
-  const targetPath = path.resolve(serverOutDir, `${runtimeName}.js`)
-
-  if (platform === "node") {
-    const bundlePath = path.resolve(runtimeModuleDir, `${runtimeName}.bundle.js`)
-    try {
-      await fs.access(bundlePath)
-      console.log(`[vite-plugin-effect] Copying ${runtimeName} to ${serverOutDir}`)
-      await fs.mkdir(serverOutDir, { recursive: true })
-      await fs.copyFile(bundlePath, targetPath)
-      console.log(`[vite-plugin-effect] ${runtimeName} copy complete`)
-      return
-    } catch {
-      // Bundle not found - fall back to building from source.
-    }
-  }
-
   const runtimePath = await findRuntimeSource(runtimeName)
+
   console.log(`[vite-plugin-effect] Building ${runtimeName} to ${serverOutDir}`)
   const vite = await import("vite")
   await vite.build({
