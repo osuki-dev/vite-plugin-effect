@@ -1,5 +1,8 @@
 import { HttpRouter, HttpServerRequest, HttpServerResponse, HttpMiddleware } from "effect/unstable/http"
 import { Effect, Context, Scope, Layer, Exit } from "effect"
+import { Scope as ScopeTag } from "effect/Scope"
+import { HttpRouter as HttpRouterTag } from "effect/unstable/http/HttpRouter"
+import { HttpServerRequest as HttpServerRequestTag } from "effect/unstable/http/HttpServerRequest"
 
 // ---------------------------------------------------------------------------
 // Server API loading
@@ -35,20 +38,21 @@ export const loadServerApi = async (
     const scope = Scope.makeUnsafe()
     const dispose = () => Effect.runPromise(Scope.close(scope, Exit.void))
 
-    const routerLayer = (HttpRouter as any).layer ?? Layer.effect(HttpRouter as any)((HttpRouter as any).make)
-    const mergedLayer = Layer.provideMerge(appLayer as any, routerLayer as any)
-    const context = await Effect.runPromise(Layer.buildWithScope(mergedLayer as any, scope))
+    const routerLayer = HttpRouter.layer
+    const mergedLayer = Layer.provideMerge(appLayer as Layer.Layer<never>, routerLayer)
+    const context = await Effect.runPromise(Layer.buildWithScope(mergedLayer, scope))
 
-    const router = Context.get(context as any, HttpRouter as any)
+    const router = Context.getUnsafe(context, HttpRouterTag)
     const httpApp = router.asHttpEffect()
     const appWithMiddleware = httpApp.pipe(HttpMiddleware.logger)
 
     const handler = async (request: Request) => {
       const serverRequest = HttpServerRequest.fromWeb(request)
-      const requestContext = Context.add(context as any, HttpServerRequest.key, serverRequest)
+      const requestContext = Context.add(context, HttpServerRequestTag, serverRequest)
+        .pipe(Context.add(ScopeTag, scope))
 
       const response = await Effect.runPromise(
-        Effect.provideContext(appWithMiddleware, requestContext as any)
+        Effect.provideContext(appWithMiddleware, requestContext)
       )
 
       return HttpServerResponse.toWeb(response, {
