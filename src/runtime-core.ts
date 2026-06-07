@@ -16,6 +16,7 @@ export interface RuntimeConfig {
   readonly defaultPort: number
   readonly spaFallback: boolean
   readonly ssrEntryUrl?: string
+  readonly platform?: "node" | "cloudflare"
 }
 
 export interface RuntimeEntry {
@@ -33,7 +34,7 @@ export async function getLoadedApi(config: RuntimeConfig): Promise<LoadedApi> {
     return loadedApi
   }
   const serverModule = config.serverModule ?? await importServerModule(config)
-  loadedApi = await loadServerApi(serverModule, config.serverExports)
+  loadedApi = await loadServerApi(serverModule, config.serverExports, config.platform)
   loadedSource = source
   return loadedApi
 }

@@ -26,6 +26,7 @@ export const createCloudflareHandler = (
   config: RuntimeConfig,
   options: CloudflareHandlerOptions = {}
 ) => {
+  const configWithPlatform: RuntimeConfig = { ...config, platform: "cloudflare" }
   return async (
     request: Request,
     _env: CloudflareEnv,
@@ -39,7 +40,7 @@ export const createCloudflareHandler = (
       const url = new URL(request.url)
 
       // 1. Try API / RPC
-      const apiResponse = await handleRuntimeRequest(config, request, url)
+      const apiResponse = await handleRuntimeRequest(configWithPlatform, request, url)
       if (apiResponse) return apiResponse
 
       return notFound()

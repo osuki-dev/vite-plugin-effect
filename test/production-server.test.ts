@@ -76,6 +76,7 @@ describe("generateProductionServerRuntime", () => {
     expect(code).toContain('import { createCloudflareHandler } from "./cloudflare-runtime.js"')
     expect(code).toContain('import * as serverModule from "./server-entry.js"')
     expect(code).toContain("serverModule")
+    expect(code).toContain('platform: "cloudflare"')
     expect(code).not.toContain("serverEntryUrl")
     expect(code).not.toContain("request: Request")
     expect(code).not.toContain("ctx: ExecutionContext")

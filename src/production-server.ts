@@ -128,6 +128,7 @@ const handler = createCloudflareHandler({
   defaultHost: "0.0.0.0",
   defaultPort: 8787,
   spaFallback: false,
+  platform: "cloudflare",
 })
 
 export default {
