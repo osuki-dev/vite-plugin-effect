@@ -1,30 +1,82 @@
 import { Effect, Layer } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc"
-import { MyApi, TodoRpc } from "./shared"
+import { ApiConflictError, ApiNotFound, ApiValidationError, MyApi, TodoRpc } from "./shared"
 import { todoUseCase, userUseCase } from "./composition-root"
 import { TodoPresenter } from "./presenter/todo-presenter"
 import { UserPresenter } from "./presenter/user-presenter"
+
+const validationError = (message: string, field?: string) =>
+  new ApiValidationError(
+    field === undefined
+      ? {
+          code: "VALIDATION_FAILED",
+          message,
+        }
+      : {
+          code: "VALIDATION_FAILED",
+          message,
+          field,
+        }
+  )
+
+const notFoundError = (resource: string, id: number | string) =>
+  new ApiNotFound({
+    code: "NOT_FOUND",
+    message: `${resource} ${id} was not found`,
+    resource,
+    id: String(id),
+  })
+
+const conflictError = (resource: string, message: string) =>
+  new ApiConflictError({
+    code: "CONFLICT",
+    message,
+    resource,
+  })
+
+const validateTitle = (title: string | undefined): Effect.Effect<string, ApiValidationError> => {
+  const trimmed = title?.trim()
+  return trimmed && trimmed.length > 0
+    ? Effect.succeed(trimmed)
+    : Effect.fail(validationError("Title is required", "title"))
+}
+
+const validateUserPayload = (
+  payload: { readonly name?: string; readonly email?: string }
+): Effect.Effect<{ readonly name: string; readonly email: string }, ApiValidationError> => {
+  const name = payload.name?.trim()
+  if (!name) return Effect.fail(validationError("Name is required", "name"))
+  const email = payload.email?.trim()
+  if (!email) return Effect.fail(validationError("Email is required", "email"))
+  if (!email.includes("@")) return Effect.fail(validationError("Email must contain @", "email"))
+  return Effect.succeed({ name, email })
+}
 
 const TodosLive = HttpApiBuilder.group(MyApi, "todos", (handlers) =>
   handlers
     .handle("getTodos", () =>
       Effect.succeed(TodoPresenter.presentMany(todoUseCase.getAll()))
     )
-    .handle("createTodo", ({ payload }) => {
-      const todo = todoUseCase.create(payload.title)
-      return Effect.succeed(TodoPresenter.present(todo))
-    })
+    .handle("createTodo", ({ payload }) =>
+      validateTitle(payload.title).pipe(
+        Effect.map((title) => TodoPresenter.present(todoUseCase.create(title)))
+      ))
     .handle("deleteTodo", ({ params }) => {
       const id = Number(params.id)
       const deleted = todoUseCase.remove(id)
-      return Effect.succeed(TodoPresenter.present(deleted))
+      return deleted
+        ? Effect.succeed(TodoPresenter.present(deleted))
+        : Effect.fail(notFoundError("todo", id))
     })
-    .handle("updateTodo", ({ params, payload }) => {
-      const id = Number(params.id)
-      const updated = todoUseCase.update(id, payload.title ?? "")
-      return Effect.succeed(TodoPresenter.present(updated))
-    })
+    .handle("updateTodo", ({ params, payload }) =>
+      validateTitle(payload.title).pipe(Effect.flatMap((title) => {
+        const id = Number(params.id)
+        const updated = todoUseCase.update(id, title)
+        return updated
+          ? Effect.succeed(TodoPresenter.present(updated))
+          : Effect.fail(notFoundError("todo", id))
+      })))
 )
 
 const UsersLive = HttpApiBuilder.group(MyApi, "users", (handlers) =>
@@ -32,20 +84,30 @@ const UsersLive = HttpApiBuilder.group(MyApi, "users", (handlers) =>
     .handle("getUsers", () =>
       Effect.succeed(UserPresenter.presentMany(userUseCase.getAll()))
     )
-    .handle("createUser", ({ payload }) => {
-      const user = userUseCase.create(payload.name, payload.email)
-      return Effect.succeed(UserPresenter.present(user))
-    })
+    .handle("createUser", ({ payload }) =>
+      validateUserPayload(payload).pipe(Effect.flatMap(({ name, email }) => {
+        const exists = userUseCase.getAll().some((user) => user.email === email)
+        return exists
+          ? Effect.fail(conflictError("user", `User email ${email} already exists`))
+          : Effect.succeed(UserPresenter.present(userUseCase.create(name, email)))
+      })))
     .handle("deleteUser", ({ params }) => {
       const id = Number(params.id)
       const deleted = userUseCase.remove(id)
-      return Effect.succeed(UserPresenter.present(deleted))
+      return deleted
+        ? Effect.succeed(UserPresenter.present(deleted))
+        : Effect.fail(notFoundError("user", id))
     })
-    .handle("updateUser", ({ params, payload }) => {
-      const id = Number(params.id)
-      const updated = userUseCase.update(id, payload.name ?? "", payload.email ?? "")
-      return Effect.succeed(UserPresenter.present(updated))
-    })
+    .handle("updateUser", ({ params, payload }) =>
+      Effect.gen(function*() {
+        const { name, email } = yield* validateUserPayload(payload)
+        const id = Number(params.id)
+        const exists = userUseCase.getAll().some((user) => user.email === email && user.id !== id)
+        if (exists) return yield* Effect.fail(conflictError("user", `User email ${email} already exists`))
+        const updated = userUseCase.update(id, name, email)
+        if (!updated) return yield* Effect.fail(notFoundError("user", id))
+        return UserPresenter.present(updated)
+      }))
 )
 
 const HttpLive = HttpApiBuilder.layer(MyApi).pipe(
@@ -67,18 +129,25 @@ const TodoRpcHandlersLive = TodoRpc.toLayer(Effect.succeed({
 
   toggleTodo: ({ id }) => {
     const todo = todoUseCase.toggle(id)
-    return Effect.succeed(TodoPresenter.present(todo))
+    return todo
+      ? Effect.succeed(TodoPresenter.present(todo))
+      : Effect.fail(notFoundError("todo", id))
   },
 
   deleteTodo: ({ id }) => {
     const deleted = todoUseCase.remove(id)
-    return Effect.succeed(TodoPresenter.present(deleted))
+    return deleted
+      ? Effect.succeed(TodoPresenter.present(deleted))
+      : Effect.fail(notFoundError("todo", id))
   },
 
-  updateTodo: ({ id, title }) => {
-    const updated = todoUseCase.update(id, title)
-    return Effect.succeed(TodoPresenter.present(updated))
-  },
+  updateTodo: ({ id, title }) =>
+    validateTitle(title).pipe(Effect.flatMap((validTitle) => {
+      const updated = todoUseCase.update(id, validTitle)
+      return updated
+        ? Effect.succeed(TodoPresenter.present(updated))
+        : Effect.fail(notFoundError("todo", id))
+    })),
 }))
 
 const RpcLive = RpcServer.layerHttp({

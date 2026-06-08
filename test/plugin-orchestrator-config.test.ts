@@ -4,7 +4,6 @@ import { createPlugin } from "../src/plugin-orchestrator.ts"
 describe("PluginOrchestrator config hook", () => {
   test("returns undefined for non-build command", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
       serverEntry: "./src/server.ts",
     })
     const config = plugin.config?.({}, { command: "serve" })
@@ -13,7 +12,6 @@ describe("PluginOrchestrator config hook", () => {
 
   test("returns builder config for build command", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
       serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "build", build: { outDir: "dist" } } as any)
@@ -26,16 +24,13 @@ describe("PluginOrchestrator config hook", () => {
   })
 
   test("returns undefined when no serverEntry configured", () => {
-    const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
-    })
+    const plugin = createPlugin({})
     const config = plugin.config?.({}, { command: "build" })
     expect(config).toBeUndefined()
   })
 
   test("server environment has SSR enabled", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
       serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "build", build: { outDir: "dist" } } as any)
@@ -45,7 +40,6 @@ describe("PluginOrchestrator config hook", () => {
 
   test("server environment has correct rollup externals", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
       serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "build", build: { outDir: "dist" } } as any)

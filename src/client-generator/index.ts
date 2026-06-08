@@ -1,6 +1,2 @@
-export type { GeneratedClientOutputs } from "./writer"
-export { generateClientOutputs, writeClientOutputs } from "./writer"
 export { generateVirtualClientModule, generateVirtualTypesModule } from "./virtual-module"
 export { generateVirtualClientDts } from "./dts-shim"
-export { generateClientFile } from "./client-codegen"
-export { discoverSchemaExports, scanSchemaExportNames, stripTypeScriptExtension } from "./schema-discovery"

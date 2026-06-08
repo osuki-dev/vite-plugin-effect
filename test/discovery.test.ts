@@ -1,7 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-import * as path from "node:path"
 import { tmpdir } from "node:os"
 import type { ResolvedConfig } from "vite"
 import { discoverEntriesFromServerEntry } from "../src/discovery.ts"
@@ -47,7 +46,6 @@ describe("discoverEntriesFromServerEntry", () => {
       expect(entries).toHaveLength(1)
       expect(entries[0].type).toBe("http")
       expect(entries[0].exportName).toBe("MyApi")
-      expect(entries[0].sharedPath).toBe("./src/shared.ts")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -168,7 +166,6 @@ describe("discoverEntriesFromServerEntry", () => {
 
       expect(entries).toHaveLength(1)
       expect(entries[0].exportName).toBe("MyApi")
-      expect(entries[0].sharedPath).toBe("./src/server.ts")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -199,7 +196,6 @@ describe("discoverEntriesFromServerEntry", () => {
 
       expect(entries).toHaveLength(1)
       expect(entries[0].exportName).toBe("MyApi")
-      expect(entries[0].sharedPath).toBe("./src/server.ts")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -231,6 +227,69 @@ describe("discoverEntriesFromServerEntry", () => {
 
       expect(entries).toHaveLength(1)
       expect(entries[0].exportName).toBe("MyApi")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("discovers local non-exported HTTP API expressions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
+    try {
+      await createFixture(root, {
+        "src/server.ts": `
+          import { Effect, Layer, Schema } from "effect"
+          import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
+          const Todo = Schema.Struct({ id: Schema.Number })
+          const MyApi = HttpApi.make("MyApi").add(
+            HttpApiGroup.make("todos").add(
+              HttpApiEndpoint.get("getTodos", "/todos", { success: Schema.Array(Todo) })
+            )
+          )
+          const TodosLive = HttpApiBuilder.group(MyApi, "todos", handlers =>
+            handlers.handle("getTodos", () => Effect.succeed([]))
+          )
+          export const ServerLive = HttpApiBuilder.layer(MyApi).pipe(Layer.provide(TodosLive))
+        `,
+      })
+
+      const entries = await discoverEntriesFromServerEntry(
+        { serverEntry: "./src/server.ts", serverExports: ["ServerLive"], entries: [] } as any,
+        createMockConfig(root)
+      )
+
+      expect(entries).toHaveLength(1)
+      expect(entries[0].type).toBe("http")
+      expect(entries[0].exportName).toBe("MyApi")
+      expect(entries[0].reflectionExpression).toBe("MyApi")
+      expect(entries[0].reflectionName).toBe("__vitePluginEffectContract0")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("discovers inline HTTP API expressions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
+    try {
+      await createFixture(root, {
+        "src/server.ts": `
+          import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi"
+          export const ServerLive = HttpApiBuilder.layer(
+            HttpApi.make("InlineApi").add(
+              HttpApiGroup.make("health").add(HttpApiEndpoint.get("ping", "/ping"))
+            )
+          )
+        `,
+      })
+
+      const entries = await discoverEntriesFromServerEntry(
+        { serverEntry: "./src/server.ts", serverExports: ["ServerLive"], entries: [] } as any,
+        createMockConfig(root)
+      )
+
+      expect(entries).toHaveLength(1)
+      expect(entries[0].type).toBe("http")
+      expect(entries[0].exportName).toBe("InlineApi")
+      expect(entries[0].reflectionExpression).toContain('HttpApi.make("InlineApi")')
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -283,12 +342,11 @@ describe("discoverEntriesFromServerEntry", () => {
         "src/server.ts": `const foo = "bar"`,
       })
 
-      expect(
-        discoverEntriesFromServerEntry(
-          { serverEntry: "./src/server.ts", serverExports: ["MainLive"], entries: [] } as any,
-          createMockConfig(root)
-        )
-      ).rejects.toThrow()
+      const entries = await discoverEntriesFromServerEntry(
+        { serverEntry: "./src/server.ts", serverExports: ["MainLive"], entries: [] } as any,
+        createMockConfig(root)
+      )
+      expect(entries).toHaveLength(0)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
@@ -319,6 +377,39 @@ describe("discoverEntriesFromServerEntry", () => {
       expect(entries).toHaveLength(1)
       expect(entries[0].type).toBe("rpc")
       expect(entries[0].exportName).toBe("TodoRpc")
+      expect(entries[0].rpcPath).toBe("/rpc")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("discovers local non-exported RPC group expressions", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
+    try {
+      await createFixture(root, {
+        "src/server.ts": `
+          import { Effect, Schema } from "effect"
+          import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc"
+          const TodoRpc = RpcGroup.make(
+            Rpc.make("todoStats", { payload: {}, success: Schema.Struct({ total: Schema.Number }) })
+          )
+          const TodoRpcLive = TodoRpc.toLayer(Effect.succeed({
+            todoStats: () => Effect.succeed({ total: 1 })
+          }))
+          export const ServerLive = RpcServer.layerHttp({ group: TodoRpc, path: "/rpc", protocol: "http" })
+            .pipe(Effect.provide(TodoRpcLive), Effect.provide(RpcSerialization.layerJson))
+        `,
+      })
+
+      const entries = await discoverEntriesFromServerEntry(
+        { serverEntry: "./src/server.ts", serverExports: ["ServerLive"], entries: [] } as any,
+        createMockConfig(root)
+      )
+
+      expect(entries).toHaveLength(1)
+      expect(entries[0].type).toBe("rpc")
+      expect(entries[0].exportName).toBe("TodoRpc")
+      expect(entries[0].reflectionExpression).toBe("TodoRpc")
       expect(entries[0].rpcPath).toBe("/rpc")
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -412,49 +503,46 @@ describe("discoverEntriesFromServerEntry", () => {
 
       expect(entries).toHaveLength(1)
       expect(entries[0].exportName).toBe("MyApi")
-      expect(entries[0].sharedPath).toBe("./src/server.ts")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  test("resolves relative import path", async () => {
+  test("discovers exported HttpApi declarations directly", async () => {
     const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
     try {
       await createFixture(root, {
         "src/server.ts": `
-          import { HttpApiBuilder } from "effect/unstable/httpapi"
-          import { MyApi } from "./shared"
-          const HttpLive = HttpApiBuilder.layer(MyApi)
-        `,
-      })
-
-      const entries = await discoverEntriesFromServerEntry(
-        { serverEntry: "./src/server.ts", serverExports: ["MainLive"], entries: [] } as any,
-        createMockConfig(root)
-      )
-
-      expect(entries[0].sharedPath).toBe("./src/shared")
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  test("resolves absolute import path", async () => {
-    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
-    try {
-      await createFixture(root, {
-        "/shared.ts": `
           import { HttpApi, HttpApiGroup, HttpApiEndpoint } from "effect/unstable/httpapi"
           const todosGroup = HttpApiGroup.make("todos").add(
-            HttpApiEndpoint.make("GET")("getTodos", "/todos", { success: HttpApiEndpoint.make("GET") })
+            HttpApiEndpoint.get("getTodos", "/todos", { success: {} })
           )
           export const MyApi = HttpApi.make("MyApi").add(todosGroup)
         `,
+      })
+
+      const entries = await discoverEntriesFromServerEntry(
+        { serverEntry: "./src/server.ts", serverExports: ["MainLive"], entries: [] } as any,
+        createMockConfig(root)
+      )
+
+      expect(entries).toHaveLength(1)
+      expect(entries[0].exportName).toBe("MyApi")
+      expect(entries[0].type).toBe("http")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("discovers exported RpcGroup declarations directly", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
+    try {
+      await createFixture(root, {
         "src/server.ts": `
-          import { HttpApiBuilder } from "effect/unstable/httpapi"
-          import { MyApi } from "/shared"
-          const HttpLive = HttpApiBuilder.layer(MyApi)
+          import { Rpc, RpcGroup } from "effect/unstable/rpc"
+          export const TodoRpc = RpcGroup.make(
+            Rpc.make("todoStats", { payload: {}, success: {} })
+          )
         `,
       })
 
@@ -463,30 +551,9 @@ describe("discoverEntriesFromServerEntry", () => {
         createMockConfig(root)
       )
 
-      const expected = path.relative(root, "/shared").replace(/\\/g, "/")
-      expect(entries[0].sharedPath).toBe(expected)
-    } finally {
-      await rm(root, { recursive: true, force: true })
-    }
-  })
-
-  test("throws for non-local import", async () => {
-    const root = await mkdtemp(join(tmpdir(), "vpe-discovery-"))
-    try {
-      await createFixture(root, {
-        "src/server.ts": `
-          import { HttpApiBuilder } from "effect/unstable/httpapi"
-          import { MyApi } from "effect"
-          const HttpLive = HttpApiBuilder.layer(MyApi)
-        `,
-      })
-
-      expect(
-        discoverEntriesFromServerEntry(
-          { serverEntry: "./src/server.ts", serverExports: ["MainLive"], entries: [] } as any,
-          createMockConfig(root)
-        )
-      ).rejects.toThrow()
+      expect(entries).toHaveLength(1)
+      expect(entries[0].exportName).toBe("TodoRpc")
+      expect(entries[0].type).toBe("rpc")
     } finally {
       await rm(root, { recursive: true, force: true })
     }

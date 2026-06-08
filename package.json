@@ -23,7 +23,7 @@
 		"LICENSE"
 	],
 	"scripts": {
-		"build": "bunup src/index.ts src/production-runtime.ts src/cloudflare-runtime.ts --format esm --dts --no-splitting",
+		"build": "bunup src/index.ts src/production-runtime.ts src/bun-runtime.ts src/cloudflare-runtime.ts --format esm --dts --no-splitting",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
 		"prepublishOnly": "bun run build && bun run test"

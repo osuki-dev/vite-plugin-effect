@@ -1,73 +1,63 @@
 import * as fs from "node:fs/promises"
 import { statSync } from "node:fs"
 import * as path from "node:path"
+import * as ts from "typescript"
 import type { ResolvedConfig } from "vite"
 import { defaultApiPrefix, defaultRpcPath } from "./defaults"
-import type { ResolvedClientEntry, ResolvedPluginOptions } from "./options"
+import type { DiscoveredEntry, ResolvedPluginOptions } from "./options"
 import { resolveProjectPath } from "./path-utils"
 
-interface ImportedBinding {
-  readonly imported: string
-  readonly local: string
-  readonly source: string
+interface EffectBindings {
+  readonly httpApi: ReadonlySet<string>
+  readonly httpApiBuilder: ReadonlySet<string>
+  readonly rpcGroup: ReadonlySet<string>
+  readonly rpcServer: ReadonlySet<string>
+  readonly importAliases: ReadonlyMap<string, string>
+  readonly importSources: ReadonlyMap<string, string>
 }
 
 interface DiscoveredContract {
   readonly type: "http" | "rpc"
-  readonly localName: string
-  readonly exportName: string
-  readonly sharedPath: string
+  readonly displayName: string
+  readonly expression: string
+  readonly schemaSourcePath?: string
   readonly rpcPath?: string
 }
 
 export const discoverEntriesFromServerEntry = async (
   options: ResolvedPluginOptions,
   config: ResolvedConfig
-): Promise<ReadonlyArray<ResolvedClientEntry>> => {
+): Promise<ReadonlyArray<DiscoveredEntry>> => {
   if (!options.serverEntry) {
-    throw new Error(
-      "vite-plugin-effect: configure serverEntry when sharedPath/entries are omitted. The plugin discovers HTTP/RPC contracts from the MainLive server module."
-    )
+    return []
   }
 
   const serverEntryPath = resolveProjectPath(config, options.serverEntry)
   const source = await readSource(serverEntryPath)
-  const imports = parseNamedImports(source)
-  const contracts: Array<DiscoveredContract> = []
-
-  for (const localName of discoverHttpApiNames(source)) {
-    contracts.push(resolveContract({
-      type: "http",
-      localName,
-      imports,
-      serverEntryPath,
-    }))
+  if (!source) {
+    return []
   }
 
-  for (const rpc of discoverRpcGroups(source)) {
-    contracts.push(resolveContract({
-      type: "rpc",
-      localName: rpc.groupName,
-      rpcPath: rpc.path,
-      imports,
-      serverEntryPath,
-    }))
-  }
-
+  const contracts = discoverContracts(source, serverEntryPath)
   const deduped = dedupeContracts(contracts)
   if (deduped.length === 0) {
-    throw new Error(
-      `vite-plugin-effect: could not discover Effect HTTP/RPC contracts from ${options.serverEntry}. Expected calls like HttpApiBuilder.layer(MyApi) or RpcServer.layerHttp({ group: MyRpc, path: "/rpc" }) in the MainLive module.`
-    )
+    return []
   }
+
+  const reflectionSourcePath = toProjectRelativePath(config, serverEntryPath)
 
   return deduped.map((contract, index) => ({
     type: contract.type,
     name: defaultEntryName(contract.type, index, deduped),
-    sharedPath: toProjectRelativePath(config, contract.sharedPath),
-    exportName: contract.exportName,
-    apiPrefix: contract.type === "http" ? defaultApiPrefix : defaultApiPrefix,
+    exportName: contract.displayName,
+    sharedPath: contract.schemaSourcePath
+      ? toProjectRelativePath(config, contract.schemaSourcePath)
+      : reflectionSourcePath,
+    apiPrefix: defaultApiPrefix,
     rpcPath: contract.type === "rpc" ? contract.rpcPath ?? defaultRpcPath : defaultRpcPath,
+    reflectionName: `__vitePluginEffectContract${index}`,
+    reflectionSourcePath,
+    reflectionExpression: contract.expression,
   }))
 }
 
@@ -75,102 +65,344 @@ const readSource = async (filePath: string): Promise<string> => {
   try {
     return await fs.readFile(filePath, "utf8")
   } catch (error) {
-    throw new Error(`vite-plugin-effect: failed to read serverEntry ${filePath}: ${(error as Error).message}`)
+    console.warn(`[vite-plugin-effect] failed to read serverEntry ${filePath}: ${(error as Error).message}`)
+    return ""
   }
 }
 
-const parseNamedImports = (source: string): ReadonlyArray<ImportedBinding> => {
-  const imports: Array<ImportedBinding> = []
-  const importPattern = /\bimport\s+(?:type\s+)?\{([\s\S]*?)\}\s+from\s+["']([^"']+)["']/g
-  let match: RegExpExecArray | null
+const discoverContracts = (
+  source: string,
+  fileName: string
+): ReadonlyArray<DiscoveredContract> => {
+  const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  const bindings = collectEffectBindings(sourceFile)
+  const contracts: Array<DiscoveredContract> = []
 
-  while ((match = importPattern.exec(source)) !== null) {
-    const [, specifiers, sourcePath] = match
-    for (const rawSpecifier of splitTopLevelComma(specifiers ?? "")) {
-      const cleaned = rawSpecifier.trim()
-      if (!cleaned) continue
-      const aliasMatch = cleaned.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/)
-      if (!aliasMatch) continue
-      imports.push({
-        imported: aliasMatch[1]!,
-        local: aliasMatch[2] ?? aliasMatch[1]!,
-        source: sourcePath!,
-      })
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableStatement(node) && hasExportModifier(node)) {
+      for (const declaration of node.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue
+        if (isHttpApiExpression(declaration.initializer, bindings)) {
+          contracts.push({
+            type: "http",
+            displayName: declaration.name.text,
+            expression: declaration.name.text,
+          })
+        }
+        if (isRpcGroupExpression(declaration.initializer, bindings)) {
+          contracts.push({
+            type: "rpc",
+            displayName: declaration.name.text,
+            expression: declaration.name.text,
+          })
+        }
+      }
+    }
+
+    if (ts.isCallExpression(node)) {
+      const httpContract = discoverHttpContract(node, sourceFile, bindings)
+      if (httpContract) {
+        contracts.push(httpContract)
+      }
+
+      const rpcContract = discoverRpcContract(node, sourceFile, bindings)
+      if (rpcContract) {
+        contracts.push(rpcContract)
+      }
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
+  return contracts
+}
+
+const collectEffectBindings = (sourceFile: ts.SourceFile): EffectBindings => {
+  const httpApi = new Set<string>(["HttpApi"])
+  const httpApiBuilder = new Set<string>(["HttpApiBuilder"])
+  const rpcGroup = new Set<string>(["RpcGroup"])
+  const rpcServer = new Set<string>(["RpcServer"])
+  const importAliases = new Map<string, string>()
+  const importSources = new Map<string, string>()
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue
+
+    const moduleName = statement.moduleSpecifier.text
+    const importClause = statement.importClause
+    if (!importClause) continue
+    collectImportMetadata(importClause, moduleName, sourceFile.fileName, importAliases, importSources)
+
+    if (moduleName === "effect/unstable/httpapi") {
+      collectNamedImport(importClause, "HttpApi", httpApi)
+      collectNamedImport(importClause, "HttpApiBuilder", httpApiBuilder)
+    }
+    if (moduleName === "effect/unstable/httpapi/HttpApi") {
+      collectNamespaceOrDefaultImport(importClause, httpApi)
+    }
+    if (moduleName === "effect/unstable/httpapi/HttpApiBuilder") {
+      collectNamespaceOrDefaultImport(importClause, httpApiBuilder)
+    }
+
+    if (moduleName === "effect/unstable/rpc") {
+      collectNamedImport(importClause, "RpcGroup", rpcGroup)
+      collectNamedImport(importClause, "RpcServer", rpcServer)
+    }
+    if (moduleName === "effect/unstable/rpc/RpcGroup") {
+      collectNamespaceOrDefaultImport(importClause, rpcGroup)
+    }
+    if (moduleName === "effect/unstable/rpc/RpcServer") {
+      collectNamespaceOrDefaultImport(importClause, rpcServer)
     }
   }
 
-  return imports
+  return { httpApi, httpApiBuilder, rpcGroup, rpcServer, importAliases, importSources }
 }
 
-const discoverHttpApiNames = (source: string): ReadonlyArray<string> => {
-  const names = new Set<string>()
-  const patterns = [
-    /\bHttpApiBuilder\s*\.\s*layer\s*\(\s*([A-Za-z_$][\w$]*)/g,
-    /\bHttpApiBuilder\s*\.\s*group\s*\(\s*([A-Za-z_$][\w$]*)/g,
-  ]
+const collectImportMetadata = (
+  importClause: ts.ImportClause,
+  moduleName: string,
+  fromFile: string,
+  aliases: Map<string, string>,
+  sources: Map<string, string>
+): void => {
+  const namedBindings = importClause.namedBindings
+  if (!namedBindings || !ts.isNamedImports(namedBindings)) return
+  const sourcePath = resolveImportFile(fromFile, moduleName)
 
-  for (const pattern of patterns) {
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(source)) !== null) {
-      names.add(match[1]!)
+  for (const element of namedBindings.elements) {
+    const imported = element.propertyName?.text ?? element.name.text
+    aliases.set(element.name.text, imported)
+    if (sourcePath) {
+      sources.set(element.name.text, sourcePath)
     }
   }
-
-  return Array.from(names)
 }
 
-const discoverRpcGroups = (
-  source: string
-): ReadonlyArray<{ readonly groupName: string; readonly path?: string }> => {
-  const groups: Array<{ groupName: string; path?: string }> = []
-  const layerHttpPattern = /\bRpcServer\s*\.\s*layerHttp\s*\(\s*\{([\s\S]*?)\}\s*\)/g
-  let match: RegExpExecArray | null
+const collectNamedImport = (
+  importClause: ts.ImportClause,
+  importedName: string,
+  result: Set<string>
+): void => {
+  const namedBindings = importClause.namedBindings
+  if (!namedBindings || !ts.isNamedImports(namedBindings)) return
 
-  while ((match = layerHttpPattern.exec(source)) !== null) {
-    const objectSource = match[1] ?? ""
-    const groupMatch = objectSource.match(/\bgroup\s*:\s*([A-Za-z_$][\w$]*)/)
-    if (!groupMatch) continue
-    groups.push({
-      groupName: groupMatch[1]!,
-      path: objectSource.match(/\bpath\s*:\s*["']([^"']+)["']/)?.[1],
-    })
-  }
-
-  return groups
-}
-
-const resolveContract = (options: {
-  readonly type: "http" | "rpc"
-  readonly localName: string
-  readonly rpcPath?: string
-  readonly imports: ReadonlyArray<ImportedBinding>
-  readonly serverEntryPath: string
-}): DiscoveredContract => {
-  const imported = options.imports.find((binding) => binding.local === options.localName)
-  if (!imported) {
-    return {
-      type: options.type,
-      localName: options.localName,
-      exportName: options.localName,
-      sharedPath: options.serverEntryPath,
-      rpcPath: options.rpcPath,
+  for (const element of namedBindings.elements) {
+    const name = element.propertyName?.text ?? element.name.text
+    if (name === importedName) {
+      result.add(element.name.text)
     }
   }
+}
+
+const collectNamespaceOrDefaultImport = (
+  importClause: ts.ImportClause,
+  result: Set<string>
+): void => {
+  if (importClause.name) {
+    result.add(importClause.name.text)
+  }
+
+  const namedBindings = importClause.namedBindings
+  if (namedBindings && ts.isNamespaceImport(namedBindings)) {
+    result.add(namedBindings.name.text)
+  }
+}
+
+const discoverHttpContract = (
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  bindings: EffectBindings
+): DiscoveredContract | undefined => {
+  const callee = getNamespacedCall(node)
+  if (!callee) return undefined
+  if (!bindings.httpApiBuilder.has(callee.namespace)) return undefined
+  if (callee.method !== "layer" && callee.method !== "group") return undefined
+
+  const expression = node.arguments[0]
+  if (!expression) return undefined
 
   return {
-    type: options.type,
-    localName: options.localName,
-    exportName: imported.imported,
-    sharedPath: resolveImportFile(options.serverEntryPath, imported.source),
-    rpcPath: options.rpcPath,
+    type: "http",
+    displayName: expressionDisplayName(expression, "Api", bindings),
+    expression: expression.getText(sourceFile),
+    schemaSourcePath: expressionSchemaSourcePath(expression, bindings),
   }
 }
 
-const resolveImportFile = (fromFile: string, specifier: string): string => {
+const discoverRpcContract = (
+  node: ts.CallExpression,
+  sourceFile: ts.SourceFile,
+  bindings: EffectBindings
+): DiscoveredContract | undefined => {
+  const callee = getNamespacedCall(node)
+  if (!callee) return undefined
+  if (!bindings.rpcServer.has(callee.namespace)) return undefined
+
+  if (callee.method === "layerHttp") {
+    const options = node.arguments[0]
+    if (!options || !ts.isObjectLiteralExpression(options)) return undefined
+
+    const group = getObjectPropertyInitializer(options, "group")
+    if (!group) return undefined
+
+    return {
+      type: "rpc",
+      displayName: expressionDisplayName(group, "Rpc", bindings),
+      expression: group.getText(sourceFile),
+      schemaSourcePath: expressionSchemaSourcePath(group, bindings),
+      rpcPath: getStaticStringObjectProperty(options, "path"),
+    }
+  }
+
+  if (callee.method === "layer") {
+    const expression = node.arguments[0]
+    if (!expression) return undefined
+    return {
+      type: "rpc",
+      displayName: expressionDisplayName(expression, "Rpc", bindings),
+      expression: expression.getText(sourceFile),
+      schemaSourcePath: expressionSchemaSourcePath(expression, bindings),
+    }
+  }
+
+  return undefined
+}
+
+const getNamespacedCall = (
+  node: ts.CallExpression
+): { readonly namespace: string; readonly method: string } | undefined => {
+  const expression = node.expression
+  if (!ts.isPropertyAccessExpression(expression)) return undefined
+  if (!ts.isIdentifier(expression.expression)) return undefined
+  return {
+    namespace: expression.expression.text,
+    method: expression.name.text,
+  }
+}
+
+const getObjectPropertyInitializer = (
+  object: ts.ObjectLiteralExpression,
+  propertyName: string
+): ts.Expression | undefined => {
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property)) continue
+    if (propertyNameText(property.name) === propertyName) {
+      return property.initializer
+    }
+  }
+  return undefined
+}
+
+const getStaticStringObjectProperty = (
+  object: ts.ObjectLiteralExpression,
+  propertyName: string
+): string | undefined => {
+  const initializer = getObjectPropertyInitializer(object, propertyName)
+  return initializer && ts.isStringLiteralLike(initializer) ? initializer.text : undefined
+}
+
+const propertyNameText = (name: ts.PropertyName): string | undefined => {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
+    return name.text
+  }
+  return undefined
+}
+
+const expressionDisplayName = (
+  expression: ts.Expression,
+  fallback: string,
+  bindings: EffectBindings
+): string => {
+  if (ts.isIdentifier(expression)) {
+    return bindings.importAliases.get(expression.text) ?? expression.text
+  }
+  if (ts.isPropertyAccessExpression(expression)) {
+    return expression.name.text
+  }
+  const makeName = getMakeCallName(expression)
+  if (makeName) {
+    return toIdentifier(makeName) || fallback
+  }
+  return fallback
+}
+
+const expressionSchemaSourcePath = (
+  expression: ts.Expression,
+  bindings: EffectBindings
+): string | undefined => {
+  if (ts.isIdentifier(expression)) {
+    return bindings.importSources.get(expression.text)
+  }
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    return bindings.importSources.get(expression.expression.text)
+  }
+  return undefined
+}
+
+const hasExportModifier = (node: ts.Node): boolean =>
+  ts.canHaveModifiers(node) &&
+  (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false)
+
+const isHttpApiExpression = (expression: ts.Expression, bindings: EffectBindings): boolean =>
+  isRootedMakeExpression(expression, bindings.httpApi)
+
+const isRpcGroupExpression = (expression: ts.Expression, bindings: EffectBindings): boolean =>
+  isRootedMakeExpression(expression, bindings.rpcGroup)
+
+const isRootedMakeExpression = (expression: ts.Expression, namespaces: ReadonlySet<string>): boolean => {
+  const unwrapped = unwrapExpression(expression)
+  if (!ts.isCallExpression(unwrapped)) return false
+
+  const namespaced = getNamespacedCall(unwrapped)
+  if (namespaced?.method === "make" && namespaces.has(namespaced.namespace)) {
+    return true
+  }
+
+  const callee = unwrapped.expression
+  if (ts.isPropertyAccessExpression(callee) && ts.isCallExpression(callee.expression)) {
+    return isRootedMakeExpression(callee.expression, namespaces)
+  }
+
+  return false
+}
+
+const getMakeCallName = (expression: ts.Expression): string | undefined => {
+  const unwrapped = unwrapExpression(expression)
+  if (!ts.isCallExpression(unwrapped)) return undefined
+
+  const namespaced = getNamespacedCall(unwrapped)
+  if (namespaced?.method === "make") {
+    const firstArg = unwrapped.arguments[0]
+    return firstArg && ts.isStringLiteralLike(firstArg) ? firstArg.text : undefined
+  }
+
+  const callee = unwrapped.expression
+  if (ts.isPropertyAccessExpression(callee) && ts.isCallExpression(callee.expression)) {
+    return getMakeCallName(callee.expression)
+  }
+
+  return undefined
+}
+
+const unwrapExpression = (expression: ts.Expression): ts.Expression => {
+  let current = expression
+  while (ts.isParenthesizedExpression(current)) {
+    current = current.expression
+  }
+  return current
+}
+
+const toIdentifier = (value: string): string => {
+  const candidate = value.replace(/[^A-Za-z0-9_$]+/g, "_").replace(/^[^A-Za-z_$]+/, "")
+  return candidate && /^[A-Za-z_$]/.test(candidate) ? candidate : ""
+}
+
+const resolveImportFile = (fromFile: string, specifier: string): string | undefined => {
   if (!specifier.startsWith(".") && !specifier.startsWith("/")) {
-    throw new Error(
-      `vite-plugin-effect: discovered contract import ${JSON.stringify(specifier)} is not project-local. Export Effect contracts from a local module so the generated client can reference their types.`
-    )
+    return undefined
   }
 
   const base = specifier.startsWith("/")
@@ -192,12 +424,8 @@ const resolveImportFile = (fromFile: string, specifier: string): string => {
   ]
 
   for (const candidate of candidates) {
-    try {
-      const stat = requireStat(candidate)
-      if (stat?.isFile()) return candidate.replace(/\\/g, "/")
-    } catch {
-      continue
-    }
+    const stat = requireStat(candidate)
+    if (stat?.isFile()) return candidate.replace(/\\/g, "/")
   }
 
   return base.replace(/\\/g, "/")
@@ -218,7 +446,7 @@ const dedupeContracts = (
   const deduped: Array<DiscoveredContract> = []
 
   for (const contract of contracts) {
-    const key = `${contract.type}:${contract.sharedPath}:${contract.exportName}:${contract.rpcPath ?? ""}`
+    const key = `${contract.type}:${contract.expression}:${contract.rpcPath ?? ""}`
     if (seen.has(key)) continue
     seen.add(key)
     deduped.push(contract)
@@ -240,23 +468,4 @@ const defaultEntryName = (
 const toProjectRelativePath = (config: ResolvedConfig, filePath: string): string => {
   const relativePath = path.relative(config.root, filePath).replace(/\\/g, "/")
   return relativePath.startsWith(".") ? relativePath : `./${relativePath}`
-}
-
-const splitTopLevelComma = (source: string): ReadonlyArray<string> => {
-  const parts: Array<string> = []
-  let start = 0
-  let depth = 0
-
-  for (let index = 0; index < source.length; index++) {
-    const char = source[index]
-    if (char === "<" || char === "(" || char === "{" || char === "[") depth++
-    if (char === ">" || char === ")" || char === "}" || char === "]") depth--
-    if (char === "," && depth === 0) {
-      parts.push(source.slice(start, index))
-      start = index + 1
-    }
-  }
-
-  parts.push(source.slice(start))
-  return parts
 }

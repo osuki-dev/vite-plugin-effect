@@ -22,10 +22,20 @@ export interface CloudflareHandlerOptions {
   readonly passThroughOnException?: boolean
 }
 
+export type CloudflareFetchHandler = (
+  request: Request,
+  env: CloudflareEnv,
+  ctx: ExecutionContext
+) => Promise<Response>
+
+export interface CloudflareDefaultExport {
+  readonly fetch: CloudflareFetchHandler
+}
+
 export const createCloudflareHandler = (
   config: RuntimeConfig,
   options: CloudflareHandlerOptions = {}
-) => {
+): CloudflareFetchHandler => {
   const configWithPlatform: RuntimeConfig = { ...config, platform: "cloudflare" }
   return async (
     request: Request,
@@ -63,10 +73,10 @@ function notFound(): Response {
 export default function createCloudflareDefaultExport(
   config: RuntimeConfig,
   options?: CloudflareHandlerOptions
-) {
+): CloudflareDefaultExport {
   const handler = createCloudflareHandler(config, options)
   return {
-    async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext) {
+    async fetch(request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> {
       return handler(request, env, ctx)
     },
   }

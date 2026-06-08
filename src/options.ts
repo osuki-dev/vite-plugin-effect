@@ -1,56 +1,21 @@
 import {
-  defaultApiPrefix,
   defaultClientKind,
   defaultClientPath,
   defaultDtsPath,
-  defaultEntryName,
-  defaultHttpExportName,
-  defaultMode,
+  defaultApiPrefix,
+  defaultRpcPath,
   defaultProductionServerEntry,
   defaultProductionServerHost,
   defaultProductionServerPort,
   defaultProductionServerSpaFallback,
-  defaultRpcExportName,
-  defaultRpcPath,
   defaultServerExports,
   defaultServerOutDir,
   defaultSsrEntry,
   defaultVirtualModuleId,
 } from "./defaults"
 
-export type EffectApiMode = "http" | "rpc"
 export type ClientKind = "effect" | "promise"
-export type ServerPlatform = "node" | "cloudflare"
-
-export interface HttpClientEntry {
-  type: "http"
-  /**
-   * Namespace used when more than one entry is configured.
-   */
-  name?: string
-  sharedPath: string
-  exportName?: string
-  apiPrefix?: string | RegExp
-}
-
-export interface RpcClientEntry {
-  type: "rpc"
-  /**
-   * Namespace used when more than one entry is configured.
-   */
-  name?: string
-  sharedPath: string
-  exportName?: string
-  rpcPath?: string
-}
-
-export type ClientEntry = HttpClientEntry | RpcClientEntry
-
-export interface VirtualModuleContentOptions {
-  entry: ResolvedClientEntry
-  entries: ReadonlyArray<ResolvedClientEntry>
-  clientKind: ClientKind
-}
+export type ServerPlatform = "node" | "bun" | "cloudflare"
 
 export interface ProductionServerOptions {
   /**
@@ -102,12 +67,6 @@ export interface SsrOptions {
 
 export interface VitePluginEffectOptions {
   /**
-   * Explicit HTTP/RPC client entries. Use this for fullstack apps that expose
-   * HTTP API and RPC from the same MainLive/ServerLive.
-   */
-  entries?: ReadonlyArray<ClientEntry>
-
-  /**
    * Default export strategy for `client`.
    * - `effect`: `client` is the official Effect client and methods return Effect/Stream
    * - `promise`: `client` is a plain Promise client, generated from the Effect client
@@ -115,20 +74,7 @@ export interface VitePluginEffectOptions {
    */
   clientKind?: ClientKind
 
-  /**
-   * Back-compat single-entry API mode.
-   * @default 'http'
-   */
-  mode?: EffectApiMode
-
-  apiPrefix?: string | RegExp
-  rpcPath?: string
-  sharedPath?: string
-  exportName?: string
-
   virtualModuleId?: string
-
-  virtualModuleContent?: (options: VirtualModuleContentOptions) => string
 
   /**
    * Generated strongly typed client file.
@@ -175,23 +121,27 @@ export interface VitePluginEffectOptions {
   ssr?: false | SsrOptions
 }
 
-export interface ResolvedClientEntry {
-  type: EffectApiMode
+export interface DiscoveredEntry {
+  type: "http" | "rpc"
   name: string
-  sharedPath: string
   exportName: string
+  sharedPath: string
   apiPrefix: string | RegExp
   rpcPath: string
+  reflectionName?: string
+  reflectionSourcePath?: string
+  reflectionExpression?: string
 }
 
+export type ResolvedClientEntry = DiscoveredEntry
+
 export interface ResolvedPluginOptions {
-  entries: ReadonlyArray<ResolvedClientEntry>
+  entries: ReadonlyArray<DiscoveredEntry>
   clientKind: ClientKind
   virtualModuleId: string
   resolvedVirtualModuleId: string
   virtualTypesModuleId: string
   resolvedVirtualTypesModuleId: string
-  virtualModuleContent?: (options: VirtualModuleContentOptions) => string
   clientPath: string | false
   dts: string | false
   serverEntry?: string
@@ -217,7 +167,6 @@ export interface ResolvedProductionServerOptions {
 
 export const resolveOptions = (options: VitePluginEffectOptions): ResolvedPluginOptions => {
   const virtualModuleId = options.virtualModuleId ?? defaultVirtualModuleId
-  const entries = resolveEntries(options)
   const serverExports = Array.isArray(options.serverExport)
     ? options.serverExport
     : options.serverExport
@@ -227,13 +176,12 @@ export const resolveOptions = (options: VitePluginEffectOptions): ResolvedPlugin
   const ssr = resolveSsr(options.ssr)
 
   return {
-    entries,
+    entries: [],
     clientKind: options.clientKind ?? defaultClientKind,
     virtualModuleId,
     resolvedVirtualModuleId: `\0${virtualModuleId}`,
     virtualTypesModuleId: `${virtualModuleId}?types`,
     resolvedVirtualTypesModuleId: `\0${virtualModuleId}?types`,
-    virtualModuleContent: options.virtualModuleContent,
     clientPath: options.clientPath ?? defaultClientPath,
     dts: options.dts ?? defaultDtsPath,
     serverEntry: options.serverEntry,
@@ -267,37 +215,6 @@ const resolveProductionServer = (
     platform: options?.platform ?? "node",
   }
 }
-
-const resolveEntries = (options: VitePluginEffectOptions): ReadonlyArray<ResolvedClientEntry> => {
-  if (options.entries && options.entries.length > 0) {
-    return options.entries.map(resolveEntry)
-  }
-
-  if (!options.sharedPath) {
-    return []
-  }
-
-  const mode = options.mode ?? defaultMode
-  return [
-    resolveEntry({
-      type: mode,
-      name: mode === "http" ? "api" : "rpc",
-      sharedPath: options.sharedPath,
-      exportName: options.exportName,
-      apiPrefix: options.apiPrefix,
-      rpcPath: options.rpcPath,
-    } as ClientEntry),
-  ]
-}
-
-const resolveEntry = (entry: ClientEntry): ResolvedClientEntry => ({
-  type: entry.type,
-  name: entry.name ?? defaultEntryName(entry.type),
-  sharedPath: entry.sharedPath,
-  exportName: entry.exportName ?? (entry.type === "http" ? defaultHttpExportName : defaultRpcExportName),
-  apiPrefix: entry.type === "http" ? entry.apiPrefix ?? defaultApiPrefix : defaultApiPrefix,
-  rpcPath: entry.type === "rpc" ? entry.rpcPath ?? defaultRpcPath : defaultRpcPath,
-})
 
 export { resolveProjectPath } from "./path-utils"
 

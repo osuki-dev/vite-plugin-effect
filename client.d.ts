@@ -3,7 +3,7 @@ declare module "vite-plugin-effect/client" {
 
   export type EffectClient = EffectClientConfig extends {
     readonly client: infer Client
-  } ? Client : unknown
+  } ? Client : never
 
   export type PromiseClient = AwaitableClient<EffectClient>
 
@@ -39,10 +39,10 @@ declare module "vite-plugin-effect/client" {
         ? T
         : T
 
-  export type ClientMethod = (...args: ReadonlyArray<any>) => any
+  export type ClientMethod = (...args: ReadonlyArray<never>) => never
 
   export type MethodInput<Method> =
-    Method extends (...args: infer Args) => any
+    Method extends (...args: infer Args) => infer _Return
       ? Args extends []
         ? void
         : Args[0]
@@ -51,8 +51,30 @@ declare module "vite-plugin-effect/client" {
   export type MethodPayload<Input> =
     Input extends { readonly payload: infer Payload } ? Payload : Input
 
+  export type MethodPart<Input, Key extends PropertyKey> =
+    Input extends { readonly [K in Key]?: infer Value } ? Value : never
+
+  export type MethodParams<Input> = MethodPart<Input, "params">
+
+  export type MethodQuery<Input> = MethodPart<Input, "query">
+
+  export type MethodHeaders<Input> = MethodPart<Input, "headers">
+
+  export type MethodReturn<Method> =
+    Method extends (...args: infer _Args) => infer Return ? Return : never
+
+  export type MethodSuccess<Method> =
+    MethodReturn<Method> extends import("effect").Effect.Effect<infer Success, infer _Error, infer _Services>
+      ? Success
+      : Awaited<MethodReturn<Method>>
+
+  export type MethodError<Method> =
+    MethodReturn<Method> extends import("effect").Effect.Effect<infer _Success, infer Error, infer _Services>
+      ? Error
+      : never
+
   export type MethodResult<Method> =
-    Method extends (...args: ReadonlyArray<any>) => infer Return ? Awaited<Return> : never
+    MethodSuccess<Method>
 }
 
 declare module "virtual:effect/client" {

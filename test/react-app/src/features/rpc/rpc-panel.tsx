@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Todo, TodoStats } from '@/lib/effect-client'
+import type { Todo, TodoStats } from 'virtual:effect/client'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

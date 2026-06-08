@@ -4,7 +4,7 @@ import { createPlugin } from "../src/plugin-orchestrator.ts"
 describe("PluginOrchestrator lifecycle hooks", () => {
   test("buildStart triggers client regeneration", async () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "serve", build: { outDir: "dist" } } as any)
     // buildStart should not throw
@@ -13,7 +13,6 @@ describe("PluginOrchestrator lifecycle hooks", () => {
 
   test("closeBundle is a no-op for server build", async () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
       serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "build", build: { outDir: "dist" } } as any)
@@ -23,7 +22,7 @@ describe("PluginOrchestrator lifecycle hooks", () => {
 
   test("configureServer mounts middleware", async () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     })
     const middlewares: any[] = []
     const server = {
@@ -37,7 +36,7 @@ describe("PluginOrchestrator lifecycle hooks", () => {
 
   test("configurePreviewServer mounts preview middleware", async () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     })
     const middlewares: any[] = []
     const server = {
@@ -51,7 +50,7 @@ describe("PluginOrchestrator lifecycle hooks", () => {
 
   test("resolveId returns undefined for unknown module", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "serve", build: { outDir: "dist" } } as any)
     const resolvedId = plugin.resolveId?.("some-random-module", "", {})
@@ -60,7 +59,7 @@ describe("PluginOrchestrator lifecycle hooks", () => {
 
   test("load returns undefined for unknown module", () => {
     const plugin = createPlugin({
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     })
     plugin.configResolved?.({ root: "/tmp", command: "serve", build: { outDir: "dist" } } as any)
     const code = plugin.load?.("\0some-random-module")

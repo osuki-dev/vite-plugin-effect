@@ -11,8 +11,8 @@ import { buildSsrBundle } from "./ssr/build-step"
 
 const runtimeModuleDir = path.dirname(fileURLToPath(import.meta.url))
 
-export async function copyProductionRuntime(serverOutDir: string, platform: "node" | "cloudflare" = "node"): Promise<void> {
-  const runtimeName = platform === "cloudflare" ? "cloudflare-runtime" : "production-runtime"
+export async function copyProductionRuntime(serverOutDir: string, platform: "node" | "bun" | "cloudflare" = "node"): Promise<void> {
+  const runtimeName = platform === "cloudflare" ? "cloudflare-runtime" : platform === "bun" ? "bun-runtime" : "production-runtime"
   const runtimePath = await findRuntimeSource(runtimeName)
 
   console.log(`[vite-plugin-effect] Building ${runtimeName} to ${serverOutDir}`)

@@ -5,14 +5,13 @@ import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import type { AwaitableClient, MethodInput, MethodPayload, MethodSuccess } from "vite-plugin-effect/client"
 
-const Todo = Schema.Struct({ "id": Schema.Number, "title": Schema.String, "completed": Schema.Boolean })
+const Todo = Schema.Struct({ "id": Schema.Number, "title": Schema.String, "completed": Schema.Boolean }).annotate({ "identifier": "Todo" })
 
 export type Todo = Schema.Schema.Type<typeof Todo>
 
 const __httpApi0 = HttpApi.make("MyApi").add(
   HttpApiGroup.make("todos").add(
-    HttpApiEndpoint.make("GET")("getTodos", "/todos", { success: Schema.Array(Todo) }),
-    HttpApiEndpoint.make("POST")("createTodo", "/todos", { payload: Schema.Struct({ "title": Schema.String }), success: Todo })
+    HttpApiEndpoint.make("GET")("getTodos", "/todos", { success: Schema.Array(Todo) })
   )
 )
 
@@ -50,13 +49,6 @@ export namespace Api {
       export type Input = MethodInput<Method>
       export type Success = MethodSuccess<Method>
     }
-
-    export namespace createTodo {
-      type Method = Entry0EffectClient["todos"]["createTodo"]
-      export type Input = MethodInput<Method>
-      export type Payload = MethodPayload<Input>
-      export type Success = MethodSuccess<Method>
-    }
   }
 }
 
@@ -66,8 +58,7 @@ export type Client = PromiseClient
 
 const __promiseClient0: Entry0PromiseClient = {
   todos: {
-    getTodos: (...args) => Effect.runPromise(__effectClient0.todos.getTodos(normalizeRequest<MethodInput<Entry0EffectClient["todos"]["getTodos"]>>(args[0], args.length > 0))),
-    createTodo: (...args) => Effect.runPromise(__effectClient0.todos.createTodo(normalizeRequest<MethodInput<Entry0EffectClient["todos"]["createTodo"]>>(args[0], args.length > 0)))
+    getTodos: (...args) => Effect.runPromise(__effectClient0.todos.getTodos(normalizeRequest<MethodInput<Entry0EffectClient["todos"]["getTodos"]>>(args[0], args.length > 0)))
   }
 }
 

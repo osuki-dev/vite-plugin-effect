@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test"
 import { PluginOrchestrator, createPlugin } from "../src/plugin-orchestrator.ts"
-import type { VitePluginEffectOptions } from "../src/options.ts"
+import { resolveOptions, type VitePluginEffectOptions, type ResolvedClientEntry } from "../src/options.ts"
 import type { ResolvedConfig } from "vite"
 
 const mockConfig = (root: string = "/tmp"): ResolvedConfig =>
@@ -13,8 +13,7 @@ const mockConfig = (root: string = "/tmp"): ResolvedConfig =>
 describe("PluginOrchestrator", () => {
   test("can be created with dependency injection", () => {
     const options: VitePluginEffectOptions = {
-      sharedPath: "./src/shared.ts",
-      mode: "http",
+      serverEntry: "./src/server.ts",
     }
     const plugin = createPlugin(options)
     expect(plugin.name).toBe("vite-plugin-effect")
@@ -31,8 +30,7 @@ describe("PluginOrchestrator", () => {
 
   test("resolveVirtualModuleId returns resolved id for virtual module", () => {
     const options: VitePluginEffectOptions = {
-      sharedPath: "./src/shared.ts",
-      mode: "http",
+      serverEntry: "./src/server.ts",
     }
     const plugin = createPlugin(options)
     plugin.configResolved?.(mockConfig())
@@ -42,7 +40,7 @@ describe("PluginOrchestrator", () => {
 
   test("resolveVirtualModuleId returns undefined for unknown module", () => {
     const options: VitePluginEffectOptions = {
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     }
     const plugin = createPlugin(options)
     plugin.configResolved?.(mockConfig())
@@ -52,8 +50,7 @@ describe("PluginOrchestrator", () => {
 
   test("load generates virtual module code", () => {
     const options: VitePluginEffectOptions = {
-      sharedPath: "./src/shared.ts",
-      mode: "http",
+      serverEntry: "./src/server.ts",
     }
     const plugin = createPlugin(options)
     plugin.configResolved?.(mockConfig())
@@ -64,12 +61,46 @@ describe("PluginOrchestrator", () => {
 
   test("load generates virtual types module", () => {
     const options: VitePluginEffectOptions = {
-      sharedPath: "./src/shared.ts",
+      serverEntry: "./src/server.ts",
     }
     const plugin = createPlugin(options)
     plugin.configResolved?.(mockConfig())
     const code = plugin.load?.("\0virtual:effect/client?types")
     expect(code).toBeDefined()
     expect(code).toContain("AwaitableClient")
+  })
+
+  test("combined client generation scales with many entries", () => {
+    const entries = Array.from({ length: 250 }, (_, index) => ({
+      type: "http" as const,
+      name: `api${index}`,
+      sharedPath: `./src/api-${index}.ts`,
+      exportName: `Api${index}`,
+      apiPrefix: `/api-${index}`,
+      rpcPath: "",
+    } satisfies ResolvedClientEntry))
+    const orchestrator = new PluginOrchestrator({
+      ...resolveOptions({ clientKind: "promise" }),
+      entries,
+    }, {} as any)
+    const httpEntries = entries.map((entry, index) => ({
+      entry,
+      apiInfo: {
+        identifier: `Api${index}`,
+        endpoints: [],
+        schemas: [],
+        schemaNames: new Map(),
+      },
+    }))
+
+    const started = performance.now()
+    const code = (orchestrator as any).buildCombinedClientCode(httpEntries, [])
+    const elapsed = performance.now() - started
+
+    expect(elapsed).toBeLessThan(2000)
+    expect(code).not.toContain("function makeHttpPromiseClient")
+    expect(code).not.toContain(".find(")
+    expect(code).toContain("readonly api249: Entry249PromiseClient")
+    expect(code).toContain("api249: __promiseClient249")
   })
 })
